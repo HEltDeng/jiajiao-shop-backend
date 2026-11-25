@@ -53,6 +53,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS ledger(id INTEGER PRIMARY KEY AUTOINCREMENT, workspace TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, order_id TEXT, kind TEXT NOT NULL, amount INTEGER NOT NULL, created INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY AUTOINCREMENT, workspace TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, action TEXT NOT NULL, entity TEXT NOT NULL, created INTEGER NOT NULL);
         CREATE INDEX IF NOT EXISTS order_workspace ON orders(workspace,created);
+        CREATE INDEX IF NOT EXISTS order_availability ON orders(listing_id,status);
         CREATE INDEX IF NOT EXISTS listing_workspace ON listings(workspace,shop_id);
         ''')
 
@@ -223,7 +224,7 @@ def get_shop(slug:str,req:Request):
         expire_orders(c,w['id'])
         s=c.execute("SELECT * FROM shops WHERE slug=? AND workspace=? AND status='active'",(slug,w['id'])).fetchone()
         if not s: fail(404,'店铺不存在或尚未开通，请向商家确认入口')
-        ls=c.execute("SELECT * FROM listings WHERE shop_id=? AND status='active' ORDER BY created DESC",(s['id'],)).fetchall()
+        ls=c.execute("SELECT * FROM listings WHERE workspace=? AND shop_id=? AND status='active' ORDER BY created DESC",(w['id'],s['id'])).fetchall()
         shop=dict(s); shop.pop('workspace')
         return {'shop':shop,'listings':[listing_json(c,l) for l in ls]}
 
@@ -384,11 +385,15 @@ def robots():
     from fastapi.responses import PlainTextResponse
     return PlainTextResponse('User-agent: *\nDisallow: /\n')
 
+PUBLIC_FRONTEND_FILES = {'index.html', 'entry.js', 'app.js', 'styles.css', 'assets/mark.svg'}
+
 @app.get('/{path:path}')
 def frontend(path:str):
     if path.startswith('api/'): fail(404,'接口不存在')
-    target=(FRONTEND/path).resolve()
-    if target.is_relative_to(FRONTEND) and target.is_file() and target.suffix in ('.html','.js','.css','.svg','.png','.ico','.webp'):
-        return FileResponse(target)
+    if path in PUBLIC_FRONTEND_FILES:
+        target=(FRONTEND/path).resolve()
+        if target.is_relative_to(FRONTEND) and target.is_file():
+            return FileResponse(target)
+        fail(404,'文件不存在')
     if '.' in path: fail(404,'文件不存在')
     return FileResponse(FRONTEND/'index.html')

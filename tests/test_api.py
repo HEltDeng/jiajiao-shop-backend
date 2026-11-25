@@ -170,16 +170,29 @@ def test_shop_onboarding_merchant_scope_and_publish(client):
     assert client.get('/api/shops/'+slug).status_code==404
 
 
-def test_static_spa_security_and_real_money_disabled(client):
+def test_static_spa_security_and_real_money_disabled(client, tmp_path, monkeypatch):
     assert client.get('/s/qinghe').status_code==200
+    for path in ('/entry.js', '/styles.css', '/assets/mark.svg'):
+        assert client.get(path).status_code == 200
+    assert client.get('/README.md').status_code == 404
     assert client.get('/app.py').status_code==404
     assert client.get('/api/missing').status_code==404
     assert client.get('/api/health').json()['payments']=='disabled'
     assert 'noindex' in client.get('/').headers['X-Robots-Tag']
     assert client.get('/api/orders').headers['Cache-Control']=='no-store'
+    monkeypatch.setattr(module, 'FRONTEND', tmp_path)
+    (tmp_path / 'build-tools.js').write_text('// internal build script')
+    assert client.get('/build-tools.js').status_code == 404
 
 
 def test_unauthenticated_api_denied():
     with TestClient(module.app) as c:
         assert c.get('/api/shops/qinghe').status_code==401
         assert c.get('/api/orders').status_code==401
+
+
+def test_inventory_count_uses_an_index(client):
+    listing = shop(client)['listings'][0]
+    with module.db() as c:
+        plan = c.execute("EXPLAIN QUERY PLAN SELECT COUNT(*) FROM orders WHERE listing_id=? AND status IN ('pending','paid','disputed','completed')", (listing['id'],)).fetchall()
+    assert any('order_availability' in step['detail'] for step in plan)
